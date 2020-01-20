@@ -1,0 +1,4 @@
+tests:
+  system.mutex.init:
+    min_ram: 32
+    tags: kernel
