@@ -31,6 +31,7 @@ from distutils.spawn import find_executable
 from colorama import Fore
 import yaml
 import platform
+import git
 
 try:
     import serial
@@ -2936,12 +2937,140 @@ class TestSuite(DisablePyTestCollectionMixin):
 
         return filtered_string
 
+    def xunit_test_report(self, filename, platform=None, full_report=False, append=False):
+        fails = 0
+        passes = 0
+        errors = 0
+        skips = 0
+        duration = 0
+
+        run = None
+        eleTestsuite = None
+        repo = git.Repo()
+        branch = 'github master https://github.com/zephyrproject-rtos/zephyr'
+
+        eleTestsuites = ET.Element('testsuites')
+
+        for _, instance in self.instances.items():
+            if platform and instance.platform.name != platform:
+                continue
+
+            if full_report:
+                tname = os.path.basename(instance.testcase.name)
+            else:
+                tname = instance.testcase.name
+
+            if run != os.path.basename(tname):
+                fails = 0
+                passes = 0
+                errors = 0
+                skips = 0
+                duration = 0
+
+                run = os.path.basename(tname)
+                eleTestsuite = ET.SubElement(eleTestsuites, 'testsuite',
+                                             name=run, time="%f" % duration,
+                                             tests="%d" % (errors + passes + fails + skips),
+                                             failures="%d" % fails,
+                                             errors="%d" % (errors), skip="%s" % (skips))
+
+                properties = ET.SubElement(eleTestsuite, 'properties')
+                ET.SubElement(properties, 'property', name='Host Environment', value='Ubuntu18.04')
+                ET.SubElement(properties, 'property', name='Zephyr SDK Version', value='zephyr-sdk-0.11.3')
+                ET.SubElement(properties, 'property', name='Zephyr Branch', value=branch)
+                ET.SubElement(properties, 'property', name='Zephyr Commit ID', value=repo.head.object.hexsha[:10])
+                ET.SubElement(properties, 'property', name='Zephyr Commit Describe', value=repo.git.describe())
+
+            handler_time = instance.metrics.get('handler_time', 0)
+            duration += handler_time
+
+            if full_report:
+                for k in instance.results.keys():
+                    eleTestcase = ET.SubElement(
+                        eleTestsuite, 'testcase',
+                        classname="%s:%s" % (instance.platform.name, tname),
+                        name="%s" % (k), time="%f" % handler_time)
+                    if instance.results[k] in ['FAIL', 'BLOCK']:
+                        if instance.results[k] == 'FAIL':
+                            el = ET.SubElement(
+                                eleTestcase,
+                                'failure',
+                                type="failure",
+                                message="failed")
+                            fails += 1
+                        else:
+                            el = ET.SubElement(
+                                eleTestcase,
+                                'error',
+                                type="failure",
+                                message="failed")
+                            errors += 1
+                        p = os.path.join(self.outdir, instance.platform.name, instance.testcase.name)
+                        log_file = os.path.join(p, "handler.log")
+                        el.text = self.process_log(log_file)
+
+                    elif instance.results[k] == 'SKIP':
+                        el = ET.SubElement(
+                            eleTestcase,
+                            'skipped',
+                            type="skipped",
+                            message=instance.reason)
+                        skips += 1
+                    else:
+                        passes += 1
+            else:
+                eleTestcase = ET.SubElement(eleTestsuite, 'testcase',
+                    classname="%s:%s" % (instance.platform.name, instance.testcase.name),
+                    name="%s" % (instance.testcase.name),
+                    time="%f" % handler_time)
+                if instance.status in ["failed", "timeout"]:
+                    failure = ET.SubElement(
+                        eleTestcase,
+                        'failure',
+                        type="failure",
+                        message=instance.reason)
+                    if instance.reason in ['build_error', 'handler_crash']:
+                        errors += 1
+                    else:
+                        fails += 1
+
+                    p = ("%s/%s/%s" % (self.outdir, instance.platform.name, instance.testcase.name))
+                    bl = os.path.join(p, "build.log")
+                    hl = os.path.join(p, "handler.log")
+                    log_file = bl
+                    if instance.reason != 'Build error':
+                        if os.path.exists(hl):
+                            log_file = hl
+                        else:
+                            log_file = bl
+
+                    failure.text = self.process_log(log_file)
+
+                elif instance.status == "skipped":
+                    ET.SubElement(eleTestcase, 'skipped', type="skipped", message="Skipped")
+                    skips += 1
+                else:
+                    passes += 1
+
+            eleTestsuite.attrib['time'] = "%d" % duration
+            eleTestsuite.attrib['tests'] = "%d" % (errors + passes + fails + skips)
+            eleTestsuite.attrib['failures'] = "%d" % fails
+            eleTestsuite.attrib['errors'] = "%d" % errors
+            eleTestsuite.attrib['skip'] = "%d" % skips
+
+        result = ET.tostring(eleTestsuites)
+        with open(filename, 'wb') as report:
+            report.write(result)
+
+
     def xunit_report(self, filename, platform=None, full_report=False, append=False):
         fails = 0
         passes = 0
         errors = 0
         skips = 0
         duration = 0
+        branch = 'github master https://github.com/zephyrproject-rtos/zephyr'
+        repo = git.Repo()
 
         for _, instance in self.instances.items():
             if platform and instance.platform.name != platform:
@@ -2990,6 +3119,13 @@ class TestSuite(DisablePyTestCollectionMixin):
                                          tests="%d" % (errors + passes + fails + skips),
                                          failures="%d" % fails,
                                          errors="%d" % (errors), skip="%s" % (skips))
+            properties = ET.SubElement(eleTestsuite, 'properties')
+            ET.SubElement(properties, 'property', name='Host Environment', value='Ubuntu18.04')
+            ET.SubElement(properties, 'property', name='Zephyr SDK Version', value='zephyr-sdk-0.11.3')
+            ET.SubElement(properties, 'property', name='Zephyr Branch', value=branch)
+            ET.SubElement(properties, 'property', name='Zephyr Commit ID', value=repo.head.object.hexsha[:10])
+            ET.SubElement(properties, 'property', name='Zephyr Commit Describe', value=repo.git.describe())
+
 
         for _, instance in self.instances.items():
             if platform and instance.platform.name != platform:

@@ -1,3 +1,6 @@
 tests:
   kernel.mutex:
     tags: kernel userspace
+  kernel.mutex.negative:
+    tags: kernel userspace
+    extra_args: NEGATIVE_CASE=1
